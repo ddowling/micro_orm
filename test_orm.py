@@ -7,7 +7,8 @@ except ImportError:
 
 # Import orm classes
 import time
-from orm import model, Model, IntField, RealField, TextField, TimestampField, ForeignKeyField, BulkLogger
+from orm import model, Model, IntField, RealField, TextField, TimestampField, \
+                  BlobField, BoolField, JSONField, ForeignKeyField, BulkLogger
 
 # Connect to the database and set orm.Model to use this
 db = sqlite.connect(':memory:')
@@ -174,6 +175,46 @@ def run():
     cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='event_ts'")
     ts_schema = cur.fetchone()[0]
     ok('callable default not in schema', 'DEFAULT' not in ts_schema, True)
+
+    # --- BlobField, BoolField, JSONField ---
+    @model(table='typed')
+    class Typed(Model):
+        id      = IntField(primary_key=True)
+        raw     = BlobField()
+        active  = BoolField(default=False)
+        meta    = JSONField()
+
+    Typed.create_table()
+
+    payload = bytes([0x01, 0x02, 0xFF])
+    rec = Typed(raw=payload, active=True, meta={'v': 1, 'tags': ['a', 'b']}).insert()
+
+    ok('blob round-trips',         Typed.get(id=rec.id).raw,    payload)
+    ok('blob type is bytes',       type(Typed.get(id=rec.id).raw), bytes)
+
+    ok('bool True round-trips',    Typed.get(id=rec.id).active, True)
+    ok('bool type is bool',        type(Typed.get(id=rec.id).active), bool)
+
+    rec2 = Typed(raw=b'', active=False, meta=None).insert()
+    ok('bool False round-trips',   Typed.get(id=rec2.id).active, False)
+
+    ok('json round-trips',         Typed.get(id=rec.id).meta,   {'v': 1, 'tags': ['a', 'b']})
+    ok('json type is dict',        type(Typed.get(id=rec.id).meta), dict)
+    ok('json None round-trips',    Typed.get(id=rec2.id).meta,  None)
+
+    # bool default=False encodes to DEFAULT 0 in schema, not DEFAULT False
+    cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='typed'")
+    typed_schema = cur.fetchone()[0]
+    ok('bool default encoded in schema', 'DEFAULT 0' in typed_schema, True)
+
+    # raw stored value for bool is integer 0/1
+    cur = db.execute('SELECT active FROM "typed" WHERE id=?', [rec.id])
+    ok('bool stored as integer',   cur.fetchone()[0], 1)
+
+    # raw stored value for json is a string
+    cur = db.execute('SELECT meta FROM "typed" WHERE id=?', [rec.id])
+    raw_meta = cur.fetchone()[0]
+    ok('json stored as string',    isinstance(raw_meta, str), True)
 
     # --- migrate helpers ---
     def tbl_exists(name):

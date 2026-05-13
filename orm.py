@@ -5,6 +5,11 @@ except ImportError:
     import sqlite3 as sqlite
     print("Using default sqlite")
 
+try:
+    import ujson as json
+except ImportError:
+    import json
+
 # --- Field descriptors ---
 
 class Field:
@@ -17,6 +22,12 @@ class Field:
         self.old_name = old_name
         self.name = None  # set by @model decorator
 
+    def encode(self, value):
+        return value
+
+    def decode(self, value):
+        return value
+
 class IntField(Field):
     def __init__(self, **kw): super().__init__('INTEGER', **kw)
 
@@ -28,6 +39,27 @@ class TextField(Field):
 
 class TimestampField(Field):
     def __init__(self, **kw): super().__init__('REAL', **kw)
+
+class BlobField(Field):
+    def __init__(self, **kw): super().__init__('BLOB', **kw)
+
+class BoolField(Field):
+    def __init__(self, **kw): super().__init__('INTEGER', **kw)
+
+    def encode(self, value):
+        return None if value is None else (1 if value else 0)
+
+    def decode(self, value):
+        return None if value is None else bool(value)
+
+class JSONField(Field):
+    def __init__(self, **kw): super().__init__('TEXT', **kw)
+
+    def encode(self, value):
+        return None if value is None else json.dumps(value)
+
+    def decode(self, value):
+        return None if value is None else json.loads(value)
 
 class ForeignKeyField(Field):
     def __init__(self, related, **kw):
@@ -171,7 +203,7 @@ class Model:
     def insert(self):
         cls = self.__class__
         cols = [k for k, f in cls._fields.items() if not f.primary_key]
-        vals = [getattr(self, k) for k in cols]
+        vals = [cls._fields[k].encode(getattr(self, k)) for k in cols]
         placeholders = ', '.join('?' * len(cols))
         sql = 'INSERT INTO {} ({}) VALUES ({})'.format(
             _qi(cls._table), ', '.join(_qi(c) for c in cols), placeholders)
@@ -187,7 +219,7 @@ class Model:
         cls = self.__class__
         pk_name = _pk(cls)
         cols = [k for k in cls._fields if k != pk_name]
-        vals = [getattr(self, c) for c in cols]
+        vals = [cls._fields[c].encode(getattr(self, c)) for c in cols]
         vals.append(getattr(self, pk_name))
         set_clause = ', '.join(_qi(c) + ' = ?' for c in cols)
         sql = 'UPDATE {} SET {} WHERE {} = ?'.format(
@@ -254,7 +286,7 @@ def _build_table_sql(cls, tbl=None):
         elif not field.nullable:
             col += ' NOT NULL'
         if field.default is not None and not callable(field.default):
-            col += ' DEFAULT ' + repr(field.default)
+            col += ' DEFAULT ' + repr(field.encode(field.default))
         if isinstance(field, ForeignKeyField):
             rel = field.resolve()
             col += ' REFERENCES {} ({})'.format(_qi(rel._table), _qi(_pk(rel)))
@@ -279,7 +311,7 @@ def _col_matches(field, db_col):
         return False
     if (not field.nullable and not field.primary_key) != db_col['notnull']:
         return False
-    expected = None if (field.default is None or callable(field.default)) else repr(field.default)
+    expected = None if (field.default is None or callable(field.default)) else repr(field.encode(field.default))
     if expected != db_col['dflt_value']:
         return False
     return True
@@ -293,7 +325,7 @@ def _pk(cls):
 def _row_to_obj(cls, field_names, row):
     obj = object.__new__(cls)
     for i, name in enumerate(field_names):
-        setattr(obj, name, row[i])
+        setattr(obj, name, cls._fields[name].decode(row[i]))
     return obj
 
 def _commit(db):
@@ -325,7 +357,7 @@ class BulkLogger:
         placeholders = ', '.join('?' * len(field_names))
         sql = 'INSERT INTO {} ({}) VALUES ({})'.format(
             _qi(self._cls._table), cols, placeholders)
-        rows = [[row.get(k) for k in field_names] for row in self._buffer]
+        rows = [[self._cls._fields[k].encode(row.get(k)) for k in field_names] for row in self._buffer]
         try:
             db.executemany(sql, rows)
         except (AttributeError, TypeError):
