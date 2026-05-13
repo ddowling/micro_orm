@@ -93,7 +93,7 @@ class Model:
             if field.index and not field.primary_key:
                 idx = 'idx_{}_{}'.format(cls._table, name)
                 sql = 'CREATE INDEX IF NOT EXISTS {} ON {} ({})'.format(
-                    idx, cls._table, name)
+                    _qi(idx), _qi(cls._table), _qi(name))
                 cls._db.execute(sql)
         _commit(cls._db)
 
@@ -104,7 +104,8 @@ class Model:
 
         if not _table_exists(db, table):
             if cls._old_name and _table_exists(db, cls._old_name):
-                db.execute('ALTER TABLE {} RENAME TO {}'.format(cls._old_name, table))
+                db.execute('ALTER TABLE {} RENAME TO {}'.format(
+                    _qi(cls._old_name), _qi(table)))
                 _commit(db)
             else:
                 cls.create_table()
@@ -142,13 +143,16 @@ class Model:
         _commit(db)
         db.execute('BEGIN')
         try:
-            db.execute('DROP TABLE IF EXISTS {}'.format(tmp))
+            db.execute('DROP TABLE IF EXISTS {}'.format(_qi(tmp)))
             db.execute(_build_table_sql(cls, tmp))
             if new_col_list:
                 db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
-                    tmp, ', '.join(new_col_list), ', '.join(old_col_list), table))
-            db.execute('DROP TABLE {}'.format(table))
-            db.execute('ALTER TABLE {} RENAME TO {}'.format(tmp, table))
+                    _qi(tmp),
+                    ', '.join(_qi(c) for c in new_col_list),
+                    ', '.join(_qi(c) for c in old_col_list),
+                    _qi(table)))
+            db.execute('DROP TABLE {}'.format(_qi(table)))
+            db.execute('ALTER TABLE {} RENAME TO {}'.format(_qi(tmp), _qi(table)))
             db.execute('COMMIT')
         except Exception:
             try:
@@ -163,7 +167,7 @@ class Model:
         vals = [getattr(self, k) for k in cols]
         placeholders = ', '.join('?' * len(cols))
         sql = 'INSERT INTO {} ({}) VALUES ({})'.format(
-            cls._table, ', '.join(cols), placeholders)
+            _qi(cls._table), ', '.join(_qi(c) for c in cols), placeholders)
         cur = cls._db.execute(sql, vals)
         for name, field in cls._fields.items():
             if field.primary_key:
@@ -178,8 +182,9 @@ class Model:
         cols = [k for k in cls._fields if k != pk_name]
         vals = [getattr(self, c) for c in cols]
         vals.append(getattr(self, pk_name))
-        set_clause = ', '.join(c + ' = ?' for c in cols)
-        sql = 'UPDATE {} SET {} WHERE {} = ?'.format(cls._table, set_clause, pk_name)
+        set_clause = ', '.join(_qi(c) + ' = ?' for c in cols)
+        sql = 'UPDATE {} SET {} WHERE {} = ?'.format(
+            _qi(cls._table), set_clause, _qi(pk_name))
         cls._db.execute(sql, vals)
         _commit(cls._db)
         return self
@@ -187,7 +192,7 @@ class Model:
     def delete(self):
         cls = self.__class__
         pk_name = _pk(cls)
-        sql = 'DELETE FROM {} WHERE {} = ?'.format(cls._table, pk_name)
+        sql = 'DELETE FROM {} WHERE {} = ?'.format(_qi(cls._table), _qi(pk_name))
         cls._db.execute(sql, [getattr(self, pk_name)])
         _commit(cls._db)
 
@@ -196,10 +201,10 @@ class Model:
         if not kwargs:
             raise ValueError('get() requires at least one keyword argument')
         field_names = list(cls._fields.keys())
-        cols = ', '.join(field_names)
-        where = ' AND '.join(k + ' = ?' for k in kwargs)
+        cols = ', '.join(_qi(f) for f in field_names)
+        where = ' AND '.join(_qi(k) + ' = ?' for k in kwargs)
         vals = list(kwargs.values())
-        sql = 'SELECT {} FROM {} WHERE {} LIMIT 1'.format(cols, cls._table, where)
+        sql = 'SELECT {} FROM {} WHERE {} LIMIT 1'.format(cols, _qi(cls._table), where)
         cur = cls._db.execute(sql, vals)
         row = cur.fetchone()
         if row is None:
@@ -209,13 +214,13 @@ class Model:
     @classmethod
     def filter(cls, **kwargs):
         field_names = list(cls._fields.keys())
-        cols = ', '.join(field_names)
+        cols = ', '.join(_qi(f) for f in field_names)
         if kwargs:
-            where = ' AND '.join(k + ' = ?' for k in kwargs)
+            where = ' AND '.join(_qi(k) + ' = ?' for k in kwargs)
             vals = list(kwargs.values())
-            sql = 'SELECT {} FROM {} WHERE {}'.format(cols, cls._table, where)
+            sql = 'SELECT {} FROM {} WHERE {}'.format(cols, _qi(cls._table), where)
         else:
-            sql = 'SELECT {} FROM {}'.format(cols, cls._table)
+            sql = 'SELECT {} FROM {}'.format(cols, _qi(cls._table))
             vals = []
         cur = cls._db.execute(sql, vals)
         results = []
@@ -226,12 +231,15 @@ class Model:
 
 # --- Helpers ---
 
+def _qi(name):
+    return '"' + name.replace('"', '""') + '"'
+
 def _build_table_sql(cls, tbl=None):
     if tbl is None:
         tbl = cls._table
     cols = []
     for fname, field in cls._fields.items():
-        col = fname + ' ' + field.sql_type
+        col = _qi(fname) + ' ' + field.sql_type
         if field.primary_key:
             col += ' PRIMARY KEY'
             if field.sql_type == 'INTEGER':
@@ -242,9 +250,9 @@ def _build_table_sql(cls, tbl=None):
             col += ' DEFAULT ' + repr(field.default)
         if isinstance(field, ForeignKeyField):
             rel = field.resolve()
-            col += ' REFERENCES {} ({})'.format(rel._table, _pk(rel))
+            col += ' REFERENCES {} ({})'.format(_qi(rel._table), _qi(_pk(rel)))
         cols.append(col)
-    return 'CREATE TABLE IF NOT EXISTS {} ({})'.format(tbl, ', '.join(cols))
+    return 'CREATE TABLE IF NOT EXISTS {} ({})'.format(_qi(tbl), ', '.join(cols))
 
 def _table_exists(db, name):
     cur = db.execute(
@@ -252,7 +260,7 @@ def _table_exists(db, name):
     return cur.fetchone() is not None
 
 def _db_columns(db, table):
-    cur = db.execute('PRAGMA table_info({})'.format(table))
+    cur = db.execute('PRAGMA table_info({})'.format(_qi(table)))
     return {row[1]: {'type': row[2], 'notnull': bool(row[3]),
                      'dflt_value': row[4], 'pk': bool(row[5])}
             for row in cur.fetchall()}
@@ -306,10 +314,10 @@ class BulkLogger:
             return
         db = self._cls._db
         field_names = [k for k, f in self._cls._fields.items() if not f.primary_key]
-        cols = ', '.join(field_names)
+        cols = ', '.join(_qi(k) for k in field_names)
         placeholders = ', '.join('?' * len(field_names))
         sql = 'INSERT INTO {} ({}) VALUES ({})'.format(
-            self._cls._table, cols, placeholders)
+            _qi(self._cls._table), cols, placeholders)
         rows = [[row.get(k) for k in field_names] for row in self._buffer]
         try:
             db.executemany(sql, rows)

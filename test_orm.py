@@ -68,7 +68,7 @@ def run():
     # --- foreign key schema constraint ---
     cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='charge_log'")
     schema = cur.fetchone()[0]
-    ok('fk references in schema', 'REFERENCES cycle (id)' in schema, True)
+    ok('fk references in schema', 'REFERENCES "cycle" ("id")' in schema, True)
 
     # --- index field attribute ---
     ok('pk implies index',           ChargeLog._fields['id'].index,         True)
