@@ -6,7 +6,7 @@ except ImportError:
     import sqlite3 as sqlite
 
 # Import orm classes
-from orm import model, Model, IntField, RealField, TextField, BulkLogger
+from orm import model, Model, IntField, RealField, TextField, ForeignKeyField, BulkLogger
 
 # Connect to the database and set orm.Model to use this
 db = sqlite.connect(':memory:')
@@ -33,7 +33,7 @@ class Cycle(Model):
 class ChargeLog(Model):
     id         = IntField(primary_key=True)
     ts         = IntField()
-    cycle_id   = IntField()
+    cycle_id   = ForeignKeyField(Cycle)
     voltage_mv = IntField()
     current_ma = IntField()
     temp_c     = RealField()
@@ -64,6 +64,11 @@ def run():
     # --- create tables ---
     for cls in (Config, Cycle, ChargeLog):
         cls.create_table()
+
+    # --- foreign key schema constraint ---
+    cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='charge_log'")
+    schema = cur.fetchone()[0]
+    ok('fk references in schema', 'REFERENCES cycle (id)' in schema, True)
 
     # --- insert populates primary key ---
     cfg = Config(key='v_cutoff', value='4200', dtype='int').insert()

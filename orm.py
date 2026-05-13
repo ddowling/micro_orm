@@ -24,6 +24,21 @@ class RealField(Field):
 class TextField(Field):
     def __init__(self, **kw): super().__init__('TEXT', **kw)
 
+class ForeignKeyField(Field):
+    def __init__(self, related, **kw):
+        super().__init__('INTEGER', **kw)
+        self.related = related  # model class or string name for forward refs
+
+    def resolve(self):
+        if isinstance(self.related, str):
+            return _registry[self.related]
+        return self.related
+
+
+# --- Model registry (populated by @model, used by ForeignKeyField.resolve) ---
+
+_registry = {}
+
 
 # --- @model decorator: discovers fields, sets _table ---
 # Usable as @model or @model(table='name')
@@ -37,6 +52,7 @@ def model(cls=None, table=None):
                 fields[k] = v
         c._fields = fields
         c._table = table if table is not None else c.__name__.lower()
+        _registry[c.__name__] = c
         return c
     if cls is not None:
         return decorator(cls)
@@ -75,6 +91,9 @@ class Model:
                 col += ' NOT NULL'
             if field.default is not None:
                 col += ' DEFAULT ' + repr(field.default)
+            if isinstance(field, ForeignKeyField):
+                rel = field.resolve()
+                col += ' REFERENCES {} ({})'.format(rel._table, _pk(rel))
             cols.append(col)
         sql = 'CREATE TABLE IF NOT EXISTS {} ({})'.format(cls._table, ', '.join(cols))
         cls._db.execute(sql)
