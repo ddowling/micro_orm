@@ -6,7 +6,8 @@ except ImportError:
     import sqlite3 as sqlite
 
 # Import orm classes
-from orm import model, Model, IntField, RealField, TextField, ForeignKeyField, BulkLogger
+import time
+from orm import model, Model, IntField, RealField, TextField, TimestampField, ForeignKeyField, BulkLogger
 
 # Connect to the database and set orm.Model to use this
 db = sqlite.connect(':memory:')
@@ -148,6 +149,31 @@ def run():
     # --- repr ---
     r = repr(Config.get(key='v_cutoff'))
     ok('repr contains class name',  r.startswith('Config('), True)
+
+    # --- TimestampField ---
+    @model(table='event_ts')
+    class EventTs(Model):
+        id         = IntField(primary_key=True)
+        created_at = TimestampField(default=time.time)
+        ended_at   = TimestampField()
+
+    EventTs.create_table()
+
+    before = time.time()
+    ev = EventTs().insert()
+    after = time.time()
+
+    ok('timestamp default callable',   before <= ev.created_at <= after, True)
+    ok('timestamp no default is None', ev.ended_at,                      None)
+    ok('timestamp stored as real', type(ev.created_at) in (float, int),  True)
+
+    ev2 = EventTs.get(id=ev.id)
+    ok('timestamp round-trips',        before <= ev2.created_at <= after, True)
+
+    # callable default not in SQL schema
+    cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='event_ts'")
+    ts_schema = cur.fetchone()[0]
+    ok('callable default not in schema', 'DEFAULT' not in ts_schema, True)
 
     # --- migrate helpers ---
     def tbl_exists(name):

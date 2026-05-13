@@ -26,6 +26,9 @@ class RealField(Field):
 class TextField(Field):
     def __init__(self, **kw): super().__init__('TEXT', **kw)
 
+class TimestampField(Field):
+    def __init__(self, **kw): super().__init__('REAL', **kw)
+
 class ForeignKeyField(Field):
     def __init__(self, related, **kw):
         super().__init__('INTEGER', **kw)
@@ -76,7 +79,11 @@ class Model:
 
     def __init__(self, **kwargs):
         for name, field in self.__class__._fields.items():
-            setattr(self, name, kwargs.get(name, field.default))
+            if name in kwargs:
+                setattr(self, name, kwargs[name])
+            else:
+                d = field.default
+                setattr(self, name, d() if callable(d) else d)
 
     def __repr__(self):
         parts = ['{}={!r}'.format(k, getattr(self, k, None)) for k in self.__class__._fields]
@@ -246,7 +253,7 @@ def _build_table_sql(cls, tbl=None):
                 col += ' AUTOINCREMENT'
         elif not field.nullable:
             col += ' NOT NULL'
-        if field.default is not None:
+        if field.default is not None and not callable(field.default):
             col += ' DEFAULT ' + repr(field.default)
         if isinstance(field, ForeignKeyField):
             rel = field.resolve()
@@ -272,7 +279,7 @@ def _col_matches(field, db_col):
         return False
     if (not field.nullable and not field.primary_key) != db_col['notnull']:
         return False
-    expected = None if field.default is None else repr(field.default)
+    expected = None if (field.default is None or callable(field.default)) else repr(field.default)
     if expected != db_col['dflt_value']:
         return False
     return True
