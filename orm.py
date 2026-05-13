@@ -8,11 +8,13 @@ except ImportError:
 # --- Field descriptors ---
 
 class Field:
-    def __init__(self, sql_type, primary_key=False, nullable=True, default=None):
+    def __init__(self, sql_type, primary_key=False, nullable=True, default=None, index=False, old_name=None):
         self.sql_type = sql_type
         self.primary_key = primary_key
         self.nullable = nullable
         self.default = default
+        self.index = index or primary_key
+        self.old_name = old_name
         self.name = None  # set by @model decorator
 
 class IntField(Field):
@@ -43,7 +45,7 @@ _registry = {}
 # --- @model decorator: discovers fields, sets _table ---
 # Usable as @model or @model(table='name')
 
-def model(cls=None, table=None):
+def model(cls=None, table=None, old_name=None):
     def decorator(c):
         fields = {}
         for k, v in c.__dict__.items():
@@ -52,6 +54,7 @@ def model(cls=None, table=None):
                 fields[k] = v
         c._fields = fields
         c._table = table if table is not None else c.__name__.lower()
+        c._old_name = old_name
         _registry[c.__name__] = c
         return c
     if cls is not None:
@@ -62,9 +65,10 @@ def model(cls=None, table=None):
 # --- Base model (plain class, no metaclass) ---
 
 class Model:
-    _fields = {}
-    _table  = ''
-    _db     = None
+    _fields   = {}
+    _table    = ''
+    _old_name = None
+    _db       = None
 
     @classmethod
     def set_db(cls, db):
@@ -80,24 +84,69 @@ class Model:
 
     @classmethod
     def create_table(cls):
-        cols = []
-        for name, field in cls._fields.items():
-            col = name + ' ' + field.sql_type
-            if field.primary_key:
-                col += ' PRIMARY KEY'
-                if field.sql_type == 'INTEGER':
-                    col += ' AUTOINCREMENT'
-            elif not field.nullable:
-                col += ' NOT NULL'
-            if field.default is not None:
-                col += ' DEFAULT ' + repr(field.default)
-            if isinstance(field, ForeignKeyField):
-                rel = field.resolve()
-                col += ' REFERENCES {} ({})'.format(rel._table, _pk(rel))
-            cols.append(col)
-        sql = 'CREATE TABLE IF NOT EXISTS {} ({})'.format(cls._table, ', '.join(cols))
-        cls._db.execute(sql)
+        cls._db.execute(_build_table_sql(cls))
         _commit(cls._db)
+
+    @classmethod
+    def create_indexes(cls):
+        for name, field in cls._fields.items():
+            if field.index and not field.primary_key:
+                idx = 'idx_{}_{}'.format(cls._table, name)
+                sql = 'CREATE INDEX IF NOT EXISTS {} ON {} ({})'.format(
+                    idx, cls._table, name)
+                cls._db.execute(sql)
+        _commit(cls._db)
+
+    @classmethod
+    def migrate(cls):
+        db = cls._db
+        table = cls._table
+
+        if not _table_exists(db, table):
+            if cls._old_name and _table_exists(db, cls._old_name):
+                db.execute('ALTER TABLE {} RENAME TO {}'.format(cls._old_name, table))
+                _commit(db)
+            else:
+                cls.create_table()
+            return
+
+        old_cols = _db_columns(db, table)
+        need_rebuild = False
+        new_col_list = []
+        old_col_list = []
+
+        for fname, field in cls._fields.items():
+            if fname in old_cols:
+                if not _col_matches(field, old_cols[fname]):
+                    need_rebuild = True
+                new_col_list.append(fname)
+                old_col_list.append(fname)
+            else:
+                need_rebuild = True
+                src = field.old_name if (field.old_name and field.old_name in old_cols) else None
+                if src is not None:
+                    new_col_list.append(fname)
+                    old_col_list.append(src)
+
+        if not need_rebuild:
+            mapped = set(old_col_list)
+            for col_name in old_cols:
+                if col_name not in mapped:
+                    need_rebuild = True
+                    break
+
+        if not need_rebuild:
+            return
+
+        tmp = table + '_tmp'
+        db.execute('DROP TABLE IF EXISTS {}'.format(tmp))
+        db.execute(_build_table_sql(cls, tmp))
+        if new_col_list:
+            db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
+                tmp, ', '.join(new_col_list), ', '.join(old_col_list), table))
+        db.execute('DROP TABLE {}'.format(table))
+        db.execute('ALTER TABLE {} RENAME TO {}'.format(tmp, table))
+        _commit(db)
 
     def insert(self):
         cls = self.__class__
@@ -167,6 +216,49 @@ class Model:
 
 
 # --- Helpers ---
+
+def _build_table_sql(cls, tbl=None):
+    if tbl is None:
+        tbl = cls._table
+    cols = []
+    for fname, field in cls._fields.items():
+        col = fname + ' ' + field.sql_type
+        if field.primary_key:
+            col += ' PRIMARY KEY'
+            if field.sql_type == 'INTEGER':
+                col += ' AUTOINCREMENT'
+        elif not field.nullable:
+            col += ' NOT NULL'
+        if field.default is not None:
+            col += ' DEFAULT ' + repr(field.default)
+        if isinstance(field, ForeignKeyField):
+            rel = field.resolve()
+            col += ' REFERENCES {} ({})'.format(rel._table, _pk(rel))
+        cols.append(col)
+    return 'CREATE TABLE IF NOT EXISTS {} ({})'.format(tbl, ', '.join(cols))
+
+def _table_exists(db, name):
+    cur = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])
+    return cur.fetchone() is not None
+
+def _db_columns(db, table):
+    cur = db.execute('PRAGMA table_info({})'.format(table))
+    return {row[1]: {'type': row[2], 'notnull': bool(row[3]),
+                     'dflt_value': row[4], 'pk': bool(row[5])}
+            for row in cur.fetchall()}
+
+def _col_matches(field, db_col):
+    if field.sql_type != db_col['type']:
+        return False
+    if bool(field.primary_key) != db_col['pk']:
+        return False
+    if (not field.nullable and not field.primary_key) != db_col['notnull']:
+        return False
+    expected = None if field.default is None else repr(field.default)
+    if expected != db_col['dflt_value']:
+        return False
+    return True
 
 def _pk(cls):
     for k, f in cls._fields.items():

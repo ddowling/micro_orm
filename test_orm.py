@@ -32,7 +32,7 @@ class Cycle(Model):
 @model(table='charge_log')
 class ChargeLog(Model):
     id         = IntField(primary_key=True)
-    ts         = IntField()
+    ts         = IntField(index=True)
     cycle_id   = ForeignKeyField(Cycle)
     voltage_mv = IntField()
     current_ma = IntField()
@@ -69,6 +69,20 @@ def run():
     cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='charge_log'")
     schema = cur.fetchone()[0]
     ok('fk references in schema', 'REFERENCES cycle (id)' in schema, True)
+
+    # --- index field attribute ---
+    ok('pk implies index',           ChargeLog._fields['id'].index,         True)
+    ok('index=True stored',          ChargeLog._fields['ts'].index,         True)
+    ok('index defaults False',       ChargeLog._fields['voltage_mv'].index, False)
+
+    # --- create_indexes creates index in sqlite_master ---
+    for cls in (Config, Cycle, ChargeLog):
+        cls.create_indexes()
+    cur = db.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='charge_log'")
+    index_names = [r[0] for r in cur.fetchall()]
+    ok('ts index created',           'idx_charge_log_ts' in index_names,    True)
+    ok('pk not re-indexed',          'idx_charge_log_id' in index_names,    False)
+    ok('non-indexed field skipped',  'idx_charge_log_voltage_mv' in index_names, False)
 
     # --- insert populates primary key ---
     cfg = Config(key='v_cutoff', value='4200', dtype='int').insert()
@@ -134,6 +148,90 @@ def run():
     # --- repr ---
     r = repr(Config.get(key='v_cutoff'))
     ok('repr contains class name',  r.startswith('Config('), True)
+
+    # --- migrate helpers ---
+    def tbl_exists(name):
+        cur = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])
+        return cur.fetchone() is not None
+
+    def col_names(tbl):
+        return [r[1] for r in db.execute('PRAGMA table_info({})'.format(tbl)).fetchall()]
+
+    # --- migrate: no-op when schema matches ---
+    Config.migrate()
+    ok('migrate no-op preserves rows', len(Config.filter()), 2)
+
+    # --- migrate: table rename ---
+    db.execute('CREATE TABLE old_sensor (id INTEGER PRIMARY KEY AUTOINCREMENT, val REAL NOT NULL)')
+    db.execute("INSERT INTO old_sensor (val) VALUES (1.5)")
+
+    @model(table='sensor', old_name='old_sensor')
+    class Sensor(Model):
+        id  = IntField(primary_key=True)
+        val = RealField(nullable=False)
+
+    Sensor.migrate()
+    ok('table rename: new name exists',  tbl_exists('sensor'),     True)
+    ok('table rename: old name gone',    tbl_exists('old_sensor'), False)
+    ok('table rename: data preserved',   len(Sensor.filter()),     1)
+
+    # --- migrate: new column added ---
+    db.execute('CREATE TABLE reading (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER)')
+    db.execute("INSERT INTO reading (ts) VALUES (1000)")
+
+    @model(table='reading')
+    class Reading(Model):
+        id    = IntField(primary_key=True)
+        ts    = IntField()
+        units = TextField()
+
+    Reading.migrate()
+    ok('new column: present in schema',  'units' in col_names('reading'), True)
+    ok('new column: existing row intact', Reading.filter()[0].ts,         1000)
+    ok('new column: default is None',     Reading.filter()[0].units,      None)
+
+    # --- migrate: column dropped ---
+    db.execute('CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, raw INTEGER)')
+    db.execute("INSERT INTO event (ts, raw) VALUES (42, 99)")
+
+    @model(table='event')
+    class Event(Model):
+        id = IntField(primary_key=True)
+        ts = IntField()
+
+    Event.migrate()
+    ok('drop column: removed from schema', 'raw' not in col_names('event'), True)
+    ok('drop column: kept column intact',   Event.filter()[0].ts,           42)
+
+    # --- migrate: column renamed ---
+    db.execute('CREATE TABLE metric (id INTEGER PRIMARY KEY AUTOINCREMENT, val INTEGER)')
+    db.execute("INSERT INTO metric (val) VALUES (77)")
+
+    @model(table='metric')
+    class Metric(Model):
+        id    = IntField(primary_key=True)
+        value = IntField(old_name='val')
+
+    Metric.migrate()
+    ok('rename column: new name in schema', 'value' in col_names('metric'), True)
+    ok('rename column: old name gone',      'val'   not in col_names('metric'), True)
+    ok('rename column: data preserved',     Metric.filter()[0].value, 77)
+
+    # --- migrate: column type change ---
+    db.execute('CREATE TABLE sample (id INTEGER PRIMARY KEY AUTOINCREMENT, reading INTEGER)')
+    db.execute("INSERT INTO sample (reading) VALUES (3)")
+
+    @model(table='sample')
+    class Sample(Model):
+        id      = IntField(primary_key=True)
+        reading = RealField()
+
+    Sample.migrate()
+    ok('type change: schema updated', col_names('sample'), ['id', 'reading'])
+    cur = db.execute('PRAGMA table_info(sample)')
+    ok('type change: new type stored',
+       next(r[2] for r in cur.fetchall() if r[1] == 'reading'), 'REAL')
 
     print()
     print('{} passed, {} failed'.format(passed, failed))
