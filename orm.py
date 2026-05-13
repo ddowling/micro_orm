@@ -139,14 +139,23 @@ class Model:
             return
 
         tmp = table + '_tmp'
-        db.execute('DROP TABLE IF EXISTS {}'.format(tmp))
-        db.execute(_build_table_sql(cls, tmp))
-        if new_col_list:
-            db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
-                tmp, ', '.join(new_col_list), ', '.join(old_col_list), table))
-        db.execute('DROP TABLE {}'.format(table))
-        db.execute('ALTER TABLE {} RENAME TO {}'.format(tmp, table))
         _commit(db)
+        db.execute('BEGIN')
+        try:
+            db.execute('DROP TABLE IF EXISTS {}'.format(tmp))
+            db.execute(_build_table_sql(cls, tmp))
+            if new_col_list:
+                db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
+                    tmp, ', '.join(new_col_list), ', '.join(old_col_list), table))
+            db.execute('DROP TABLE {}'.format(table))
+            db.execute('ALTER TABLE {} RENAME TO {}'.format(tmp, table))
+            db.execute('COMMIT')
+        except Exception:
+            try:
+                db.execute('ROLLBACK')
+            except Exception:
+                pass
+            raise
 
     def insert(self):
         cls = self.__class__
