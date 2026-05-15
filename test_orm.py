@@ -103,6 +103,10 @@ def run():
     ok('get field value',           row.value, '4200')
     ok('get primary key',           row.id, 1)
 
+    # --- get with multiple field=value args (implicit AND) ---
+    ok('get multi-arg match',        Config.get(key='v_cutoff', dtype='int') is not None, True)
+    ok('get multi-arg no match',     Config.get(key='v_cutoff', dtype='str'), None)
+
     # --- get returns None for missing ---
     ok('get missing returns None',  Config.get(key='nope'), None)
 
