@@ -10,6 +10,11 @@ try:
 except ImportError:
     import json
 
+try:
+    import gc as _gc
+except ImportError:
+    _gc = None
+
 # --- Field descriptors ---
 
 class Field:
@@ -123,7 +128,7 @@ class Model:
 
     @classmethod
     def create_table(cls):
-        cls._db.execute(_build_table_sql(cls))
+        cls._db.execute(_build_table_sql(cls)).close()
         _commit(cls._db)
 
     @classmethod
@@ -133,7 +138,7 @@ class Model:
                 idx = 'idx_{}_{}'.format(cls._table, name)
                 sql = 'CREATE INDEX IF NOT EXISTS {} ON {} ({})'.format(
                     _qi(idx), _qi(cls._table), _qi(name))
-                cls._db.execute(sql)
+                cls._db.execute(sql).close()
         _commit(cls._db)
 
     @classmethod
@@ -143,8 +148,27 @@ class Model:
 
         if not _table_exists(db, table):
             if cls._old_name and _table_exists(db, cls._old_name):
-                db.execute('ALTER TABLE {} RENAME TO {}'.format(
-                    _qi(cls._old_name), _qi(table)))
+                # DO NOT replace this with:
+                #   db.execute('ALTER TABLE old RENAME TO new')
+                #
+                # SQLite 3.47+ ALTER TABLE RENAME rewrites every schema object
+                # that references the old table name.  On MicroPython the SQLite
+                # allocator routes through gc_alloc, so that rewrite triggers
+                # enough heap pressure to cause an automatic gc.collect().
+                # MicroPython's conservative GC then frees live SQLite pages
+                # whose pointers it cannot trace, corrupting the in-memory
+                # database (SQLITE_CORRUPT / HardFault on RP2040).
+                # Verified on usqlite with MicroPython 1.24 / SQLite 3.47.
+                old_col_names = set(_db_columns(db, cls._old_name).keys())
+                col_list = [f for f in cls._fields if f in old_col_names]
+                db.execute(_build_table_sql(cls)).close()
+                if col_list:
+                    db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
+                        _qi(table),
+                        ', '.join(_qi(c) for c in col_list),
+                        ', '.join(_qi(c) for c in col_list),
+                        _qi(cls._old_name))).close()
+                db.execute('DROP TABLE {}'.format(_qi(cls._old_name))).close()
                 _commit(db)
             else:
                 cls.create_table()
@@ -178,24 +202,43 @@ class Model:
         if not need_rebuild:
             return
 
+        # Rebuild sequence: create tmp, copy old→tmp, drop old, create final,
+        # copy tmp→final, drop tmp.
+        #
+        # DO NOT simplify the last two steps to:
+        #   ALTER TABLE tmp RENAME TO table
+        #
+        # Same reason as the rename path above: ALTER TABLE RENAME in SQLite
+        # 3.47+ does a full schema rewrite that causes gc.collect() under heap
+        # pressure on MicroPython.  That frees live SQLite pages (conservative
+        # GC cannot trace all interior SQLite pointers), corrupting the database.
+        # The symptom is SQLITE_CORRUPT followed by a HardFault in pager_playback
+        # during the attempted rollback (verified on RP2040 / usqlite).
         tmp = table + '_tmp'
         _commit(db)
         db.execute('BEGIN')
         try:
-            db.execute('DROP TABLE IF EXISTS {}'.format(_qi(tmp)))
-            db.execute(_build_table_sql(cls, tmp))
+            db.execute('DROP TABLE IF EXISTS {}'.format(_qi(tmp))).close()
+            db.execute(_build_table_sql(cls, tmp)).close()
             if new_col_list:
                 db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
                     _qi(tmp),
                     ', '.join(_qi(c) for c in new_col_list),
                     ', '.join(_qi(c) for c in old_col_list),
-                    _qi(table)))
-            db.execute('DROP TABLE {}'.format(_qi(table)))
-            db.execute('ALTER TABLE {} RENAME TO {}'.format(_qi(tmp), _qi(table)))
-            db.execute('COMMIT')
+                    _qi(table))).close()
+            db.execute('DROP TABLE {}'.format(_qi(table))).close()
+            db.execute(_build_table_sql(cls)).close()
+            if new_col_list:
+                db.execute('INSERT INTO {} ({}) SELECT {} FROM {}'.format(
+                    _qi(table),
+                    ', '.join(_qi(c) for c in new_col_list),
+                    ', '.join(_qi(c) for c in new_col_list),
+                    _qi(tmp))).close()
+            db.execute('DROP TABLE {}'.format(_qi(tmp))).close()
+            db.execute('COMMIT').close()
         except Exception:
             try:
-                db.execute('ROLLBACK')
+                db.execute('ROLLBACK').close()
             except Exception:
                 pass
             raise
@@ -212,6 +255,7 @@ class Model:
             if field.primary_key:
                 setattr(self, name, cur.lastrowid)
                 break
+        cur.close()
         _commit(cls._db)
         return self
 
@@ -224,7 +268,7 @@ class Model:
         set_clause = ', '.join(_qi(c) + ' = ?' for c in cols)
         sql = 'UPDATE {} SET {} WHERE {} = ?'.format(
             _qi(cls._table), set_clause, _qi(pk_name))
-        cls._db.execute(sql, vals)
+        cls._db.execute(sql, vals).close()
         _commit(cls._db)
         return self
 
@@ -232,7 +276,7 @@ class Model:
         cls = self.__class__
         pk_name = _pk(cls)
         sql = 'DELETE FROM {} WHERE {} = ?'.format(_qi(cls._table), _qi(pk_name))
-        cls._db.execute(sql, [getattr(self, pk_name)])
+        cls._db.execute(sql, [getattr(self, pk_name)]).close()
         _commit(cls._db)
 
     @classmethod
@@ -246,6 +290,7 @@ class Model:
         sql = 'SELECT {} FROM {} WHERE {} LIMIT 1'.format(cols, _qi(cls._table), where)
         cur = cls._db.execute(sql, vals)
         row = cur.fetchone()
+        cur.close()
         if row is None:
             return None
         return _row_to_obj(cls, field_names, row)
@@ -262,8 +307,10 @@ class Model:
             sql = 'SELECT {} FROM {}'.format(cols, _qi(cls._table))
             vals = []
         cur = cls._db.execute(sql, vals)
+        rows = cur.fetchall()
+        cur.close()
         results = []
-        for row in cur.fetchall():
+        for row in rows:
             results.append(_row_to_obj(cls, field_names, row))
         return results
 
@@ -296,13 +343,17 @@ def _build_table_sql(cls, tbl=None):
 def _table_exists(db, name):
     cur = db.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])
-    return cur.fetchone() is not None
+    found = cur.fetchone() is not None
+    cur.close()
+    return found
 
 def _db_columns(db, table):
     cur = db.execute('PRAGMA table_info({})'.format(_qi(table)))
+    rows = cur.fetchall()
+    cur.close()
     return {row[1]: {'type': row[2], 'notnull': bool(row[3]),
                      'dflt_value': row[4], 'pk': bool(row[5])}
-            for row in cur.fetchall()}
+            for row in rows}
 
 def _col_matches(field, db_col):
     if field.sql_type != db_col['type']:
@@ -359,9 +410,9 @@ class BulkLogger:
             _qi(self._cls._table), cols, placeholders)
         rows = [[self._cls._fields[k].encode(row.get(k)) for k in field_names] for row in self._buffer]
         try:
-            db.executemany(sql, rows)
+            db.executemany(sql, rows).close()
         except (AttributeError, TypeError):
             for row in rows:
-                db.execute(sql, row)
+                db.execute(sql, row).close()
         self._buffer = []
         _commit(db)

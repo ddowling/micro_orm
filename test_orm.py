@@ -12,6 +12,10 @@ from orm import model, Model, IntField, RealField, TextField, TimestampField, \
 
 # Connect to the database and set orm.Model to use this
 db = sqlite.connect(':memory:')
+# Reduce page size before any tables are created (512 is the minimum).
+db.execute('PRAGMA page_size=512').close()
+# Cap page cache to 10 pages (5 KB) to limit peak heap usage on embedded targets.
+db.execute('PRAGMA cache_size=10').close()
 Model.set_db(db)
 
 # Each model is defined be inherriting from Model and adding the @model decorator
@@ -70,6 +74,7 @@ def run():
     # --- foreign key schema constraint ---
     cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='charge_log'")
     schema = cur.fetchone()[0]
+    cur.close()
     ok('fk references in schema', 'REFERENCES "cycle" ("id")' in schema, True)
 
     # --- index field attribute ---
@@ -82,6 +87,7 @@ def run():
         cls.create_indexes()
     cur = db.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='charge_log'")
     index_names = [r[0] for r in cur.fetchall()]
+    cur.close()
     ok('ts index created',           'idx_charge_log_ts' in index_names,    True)
     ok('pk not re-indexed',          'idx_charge_log_id' in index_names,    False)
     ok('non-indexed field skipped',  'idx_charge_log_voltage_mv' in index_names, False)
@@ -174,6 +180,7 @@ def run():
     # callable default not in SQL schema
     cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='event_ts'")
     ts_schema = cur.fetchone()[0]
+    cur.close()
     ok('callable default not in schema', 'DEFAULT' not in ts_schema, True)
 
     # --- BlobField, BoolField, JSONField ---
@@ -205,33 +212,41 @@ def run():
     # bool default=False encodes to DEFAULT 0 in schema, not DEFAULT False
     cur = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='typed'")
     typed_schema = cur.fetchone()[0]
+    cur.close()
     ok('bool default encoded in schema', 'DEFAULT 0' in typed_schema, True)
 
     # raw stored value for bool is integer 0/1
     cur = db.execute('SELECT active FROM "typed" WHERE id=?', [rec.id])
     ok('bool stored as integer',   cur.fetchone()[0], 1)
+    cur.close()
 
     # raw stored value for json is a string
     cur = db.execute('SELECT meta FROM "typed" WHERE id=?', [rec.id])
     raw_meta = cur.fetchone()[0]
+    cur.close()
     ok('json stored as string',    isinstance(raw_meta, str), True)
 
     # --- migrate helpers ---
     def tbl_exists(name):
         cur = db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])
-        return cur.fetchone() is not None
+        found = cur.fetchone() is not None
+        cur.close()
+        return found
 
     def col_names(tbl):
-        return [r[1] for r in db.execute('PRAGMA table_info({})'.format(tbl)).fetchall()]
+        cur = db.execute('PRAGMA table_info({})'.format(tbl))
+        names = [r[1] for r in cur.fetchall()]
+        cur.close()
+        return names
 
     # --- migrate: no-op when schema matches ---
     Config.migrate()
     ok('migrate no-op preserves rows', len(Config.filter()), 2)
 
     # --- migrate: table rename ---
-    db.execute('CREATE TABLE old_sensor (id INTEGER PRIMARY KEY AUTOINCREMENT, val REAL NOT NULL)')
-    db.execute("INSERT INTO old_sensor (val) VALUES (1.5)")
+    db.execute('CREATE TABLE old_sensor (id INTEGER PRIMARY KEY AUTOINCREMENT, val REAL NOT NULL)').close()
+    db.execute("INSERT INTO old_sensor (val) VALUES (1.5)").close()
 
     @model(table='sensor', old_name='old_sensor')
     class Sensor(Model):
@@ -244,8 +259,8 @@ def run():
     ok('table rename: data preserved',   len(Sensor.filter()),     1)
 
     # --- migrate: new column added ---
-    db.execute('CREATE TABLE reading (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER)')
-    db.execute("INSERT INTO reading (ts) VALUES (1000)")
+    db.execute('CREATE TABLE reading (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER)').close()
+    db.execute("INSERT INTO reading (ts) VALUES (1000)").close()
 
     @model(table='reading')
     class Reading(Model):
@@ -259,8 +274,8 @@ def run():
     ok('new column: default is None',     Reading.filter()[0].units,      None)
 
     # --- migrate: column dropped ---
-    db.execute('CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, raw INTEGER)')
-    db.execute("INSERT INTO event (ts, raw) VALUES (42, 99)")
+    db.execute('CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, raw INTEGER)').close()
+    db.execute("INSERT INTO event (ts, raw) VALUES (42, 99)").close()
 
     @model(table='event')
     class Event(Model):
@@ -272,8 +287,8 @@ def run():
     ok('drop column: kept column intact',   Event.filter()[0].ts,           42)
 
     # --- migrate: column renamed ---
-    db.execute('CREATE TABLE metric (id INTEGER PRIMARY KEY AUTOINCREMENT, val INTEGER)')
-    db.execute("INSERT INTO metric (val) VALUES (77)")
+    db.execute('CREATE TABLE metric (id INTEGER PRIMARY KEY AUTOINCREMENT, val INTEGER)').close()
+    db.execute("INSERT INTO metric (val) VALUES (77)").close()
 
     @model(table='metric')
     class Metric(Model):
@@ -286,8 +301,8 @@ def run():
     ok('rename column: data preserved',     Metric.filter()[0].value, 77)
 
     # --- migrate: column type change ---
-    db.execute('CREATE TABLE sample (id INTEGER PRIMARY KEY AUTOINCREMENT, reading INTEGER)')
-    db.execute("INSERT INTO sample (reading) VALUES (3)")
+    db.execute('CREATE TABLE sample (id INTEGER PRIMARY KEY AUTOINCREMENT, reading INTEGER)').close()
+    db.execute("INSERT INTO sample (reading) VALUES (3)").close()
 
     @model(table='sample')
     class Sample(Model):
@@ -299,6 +314,7 @@ def run():
     cur = db.execute('PRAGMA table_info(sample)')
     ok('type change: new type stored',
        next(r[2] for r in cur.fetchall() if r[1] == 'reading'), 'REAL')
+    cur.close()
 
     print()
     print('{} passed, {} failed'.format(passed, failed))
