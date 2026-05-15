@@ -1,6 +1,6 @@
 # micro_orm
 
-A minimal SQLite ORM for MicroPython, designed for resource-constrained embedded targets such as the Raspberry Pi Pico. Works with [usqlite](https://github.com/spatialdude/usqlite) on MicroPython and falls back to the standard `sqlite3` module on CPython, so models can be developed and tested on a desktop.
+A minimal SQLite ORM for MicroPython, designed for resource-constrained embedded targets such as the Raspberry Pi Pico. Works with [usqlite](https://github.com/ddowling/usqlite) on MicroPython and falls back to the standard `sqlite3` module on CPython, so models can be developed and tested on a desktop.
 
 ## Requirements
 
