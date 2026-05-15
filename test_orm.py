@@ -178,6 +178,16 @@ def run():
     ok('multi-order count',         len(multi),  2)
     ok('multi-order first voltage', multi[0].voltage_mv, 4106)
 
+    # --- filter: tuple operator values ---
+    # ChargeLog has ts=1000..1006, voltage_mv=4100..4106
+    ok('tuple >=',   len(ChargeLog.filter(ts=('>=', 1004))),          3)
+    ok('tuple >',    len(ChargeLog.filter(ts=('>', 1004))),            2)
+    ok('tuple <=',   len(ChargeLog.filter(ts=('<=', 1002))),          3)
+    ok('tuple <',    len(ChargeLog.filter(ts=('<', 1002))),            2)
+    ok('tuple !=',   len(ChargeLog.filter(ts=('!=', 1003))),          6)
+    ok('tuple range', len(ChargeLog.filter(ts=('>=', 1002), voltage_mv=('<=', 4104))), 3)
+    ok('tuple + eq',  len(ChargeLog.filter(cycle_id=cyc.id, ts=('>=', 1005))),         2)
+
     # --- delete removes row ---
     cyc2.delete()
     ok('delete removes row',        Cycle.get(id=cyc2.id), None)

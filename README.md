@@ -99,7 +99,9 @@ MyModel.create_indexes()    # CREATE INDEX IF NOT EXISTS for index=True fields
 MyModel.migrate()           # reconcile live schema with model definition (see below)
 MyModel.get(field=value, …) # SELECT … LIMIT 1, returns instance or None (multiple fields AND'd)
 MyModel.filter(             # SELECT …, returns list
-    field=value,            #   WHERE field = value (AND'd; omit for all rows)
+    field=value,            #   WHERE field = value  (equality)
+    field=('>=', value),    #   WHERE field >= value (any operator: >, <, >=, <=, !=)
+                            #   multiple kwargs are AND'd; omit all for every row
     order='ts',             #   ORDER BY ts ASC  (prefix '-' for DESC, '+' or none for ASC)
     order=['-ts', 'id'],    #   multiple columns
     limit=10,               #   LIMIT n

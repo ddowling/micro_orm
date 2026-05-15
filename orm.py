@@ -300,9 +300,17 @@ class Model:
         field_names = list(cls._fields.keys())
         cols = ', '.join(_qi(f) for f in field_names)
         if kwargs:
-            where = ' AND '.join(_qi(k) + ' = ?' for k in kwargs)
-            vals = list(kwargs.values())
-            sql = 'SELECT {} FROM {} WHERE {}'.format(cols, _qi(cls._table), where)
+            parts = []
+            vals = []
+            for k, v in kwargs.items():
+                if isinstance(v, tuple):
+                    parts.append(_qi(k) + ' ' + v[0] + ' ?')
+                    vals.append(v[1])
+                else:
+                    parts.append(_qi(k) + ' = ?')
+                    vals.append(v)
+            sql = 'SELECT {} FROM {} WHERE {}'.format(
+                cols, _qi(cls._table), ' AND '.join(parts))
         else:
             sql = 'SELECT {} FROM {}'.format(cols, _qi(cls._table))
             vals = []
