@@ -97,7 +97,7 @@ MyModel.set_db(db)          # set the shared database connection (call once)
 MyModel.create_table()      # CREATE TABLE IF NOT EXISTS
 MyModel.create_indexes()    # CREATE INDEX IF NOT EXISTS for index=True fields
 MyModel.migrate()           # reconcile live schema with model definition (see below)
-MyModel.get(field=value)    # SELECT … LIMIT 1, returns instance or None
+MyModel.get(field=value, …) # SELECT … LIMIT 1, returns instance or None (multiple fields AND'd)
 MyModel.filter(             # SELECT …, returns list
     field=value,            #   WHERE field = value (AND'd; omit for all rows)
     order='ts',             #   ORDER BY ts ASC  (prefix '-' for DESC, '+' or none for ASC)
