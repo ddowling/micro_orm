@@ -176,8 +176,6 @@ db.execute('PRAGMA cache_size=10').close()   # cap cache at 10 pages (5 KB)
 Model.set_db(db)
 ```
 
-`migrate()` avoids `ALTER TABLE RENAME` entirely. SQLite 3.47+ rewrites every schema object during a rename, which generates enough heap pressure on MicroPython to trigger an automatic `gc.collect()`. The conservative GC then frees live SQLite pages whose interior pointers it cannot trace, corrupting the in-memory database (SQLITE_CORRUPT, HardFault on RP2040). The create-tmp/copy/drop/create-final/copy/drop pattern is used instead.
-
 ## Running the tests
 
 On CPython:
