@@ -296,24 +296,29 @@ class Model:
         return _row_to_obj(cls, field_names, row)
 
     @classmethod
-    def filter(cls, order=None, limit=None, offset=None, **kwargs):
+    def filter(cls, order=None, limit=None, offset=None, where=None, **kwargs):
         field_names = list(cls._fields.keys())
         cols = ', '.join(_qi(f) for f in field_names)
-        if kwargs:
-            parts = []
-            vals = []
-            for k, v in kwargs.items():
-                if isinstance(v, tuple):
-                    parts.append(_qi(k) + ' ' + v[0] + ' ?')
-                    vals.append(v[1])
-                else:
-                    parts.append(_qi(k) + ' = ?')
-                    vals.append(v)
+        parts = []
+        vals = []
+        for k, v in kwargs.items():
+            if isinstance(v, tuple):
+                parts.append(_qi(k) + ' ' + v[0] + ' ?')
+                vals.append(v[1])
+            else:
+                parts.append(_qi(k) + ' = ?')
+                vals.append(v)
+        if where is not None:
+            if isinstance(where, tuple):
+                parts.append(where[0])
+                vals.extend(where[1])
+            else:
+                parts.append(where)
+        if parts:
             sql = 'SELECT {} FROM {} WHERE {}'.format(
                 cols, _qi(cls._table), ' AND '.join(parts))
         else:
             sql = 'SELECT {} FROM {}'.format(cols, _qi(cls._table))
-            vals = []
         if order is not None:
             if isinstance(order, str):
                 order = [order]

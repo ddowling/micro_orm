@@ -188,6 +188,14 @@ def run():
     ok('tuple range', len(ChargeLog.filter(ts=('>=', 1002), voltage_mv=('<=', 4104))), 3)
     ok('tuple + eq',  len(ChargeLog.filter(cycle_id=cyc.id, ts=('>=', 1005))),         2)
 
+    # --- filter: raw where expression ---
+    ok('where string',
+       len(ChargeLog.filter(where='ts >= 1002 AND ts <= 1004')),                       3)
+    ok('where tuple params',
+       len(ChargeLog.filter(where=('ts >= ? AND ts <= ?', [1002, 1004]))),             3)
+    ok('where + kwargs',
+       len(ChargeLog.filter(cycle_id=cyc.id, where=('ts >= ?', [1003]))),             4)
+
     # --- delete removes row ---
     cyc2.delete()
     ok('delete removes row',        Cycle.get(id=cyc2.id), None)

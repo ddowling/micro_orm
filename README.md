@@ -98,14 +98,16 @@ MyModel.create_table()      # CREATE TABLE IF NOT EXISTS
 MyModel.create_indexes()    # CREATE INDEX IF NOT EXISTS for index=True fields
 MyModel.migrate()           # reconcile live schema with model definition (see below)
 MyModel.get(field=value, …) # SELECT … LIMIT 1, returns instance or None (multiple fields AND'd)
-MyModel.filter(             # SELECT …, returns list
-    field=value,            #   WHERE field = value  (equality)
-    field=('>=', value),    #   WHERE field >= value (any operator: >, <, >=, <=, !=)
-                            #   multiple kwargs are AND'd; omit all for every row
-    order='ts',             #   ORDER BY ts ASC  (prefix '-' for DESC, '+' or none for ASC)
-    order=['-ts', 'id'],    #   multiple columns
-    limit=10,               #   LIMIT n
-    offset=20,              #   OFFSET n
+MyModel.filter(                          # SELECT …, returns list
+    field=value,                         #   WHERE field = value  (equality)
+    field=('>=', value),                 #   WHERE field >= value (any operator: >, <, >=, <=, !=)
+    where='ts > 1000 AND ts < 2000',     #   raw SQL expression, AND'd with any kwargs
+    where=('ts >= ? AND ts <= ?', [a, b]),  #   parameterised form (preferred)
+                                         #   multiple kwargs are AND'd; omit all for every row
+    order='ts',                          #   ORDER BY ts ASC  (prefix '-' for DESC, '+' or none for ASC)
+    order=['-ts', 'id'],                 #   multiple columns
+    limit=10,                            #   LIMIT n
+    offset=20,                           #   OFFSET n
 )
 ```
 
