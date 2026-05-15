@@ -148,6 +148,32 @@ def run():
     logger.flush()
     ok('bulklogger total rows',     len(ChargeLog.filter(cycle_id=cyc.id)), 7)
 
+    # --- filter: order, limit, offset ---
+    # ChargeLog has 7 rows with ts = 1000..1006
+    asc  = ChargeLog.filter(order='ts')
+    ok('order asc first',           asc[0].ts,  1000)
+    ok('order asc last',            asc[-1].ts, 1006)
+
+    desc = ChargeLog.filter(order='-ts')
+    ok('order desc first',          desc[0].ts, 1006)
+    ok('order desc last',           desc[-1].ts, 1000)
+
+    expl = ChargeLog.filter(order='+ts')
+    ok('order +prefix asc first',   expl[0].ts, 1000)
+
+    top3 = ChargeLog.filter(order='-ts', limit=3)
+    ok('limit count',               len(top3),   3)
+    ok('limit+order first',         top3[0].ts,  1006)
+    ok('limit+order last',          top3[2].ts,  1004)
+
+    page = ChargeLog.filter(order='ts', limit=3, offset=2)
+    ok('offset start',              page[0].ts,  1002)
+    ok('offset count',              len(page),   3)
+
+    multi = ChargeLog.filter(order=['-voltage_mv', 'ts'], limit=2)
+    ok('multi-order count',         len(multi),  2)
+    ok('multi-order first voltage', multi[0].voltage_mv, 4106)
+
     # --- delete removes row ---
     cyc2.delete()
     ok('delete removes row',        Cycle.get(id=cyc2.id), None)

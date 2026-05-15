@@ -296,7 +296,7 @@ class Model:
         return _row_to_obj(cls, field_names, row)
 
     @classmethod
-    def filter(cls, **kwargs):
+    def filter(cls, order=None, limit=None, offset=None, **kwargs):
         field_names = list(cls._fields.keys())
         cols = ', '.join(_qi(f) for f in field_names)
         if kwargs:
@@ -306,6 +306,20 @@ class Model:
         else:
             sql = 'SELECT {} FROM {}'.format(cols, _qi(cls._table))
             vals = []
+        if order is not None:
+            if isinstance(order, str):
+                order = [order]
+            parts = []
+            for col in order:
+                if col.startswith('-'):
+                    parts.append(_qi(col[1:]) + ' DESC')
+                else:
+                    parts.append(_qi(col.lstrip('+')) + ' ASC')
+            sql += ' ORDER BY ' + ', '.join(parts)
+        if limit is not None:
+            sql += ' LIMIT {}'.format(int(limit))
+        if offset is not None:
+            sql += ' OFFSET {}'.format(int(offset))
         cur = cls._db.execute(sql, vals)
         rows = cur.fetchall()
         cur.close()
