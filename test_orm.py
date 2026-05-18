@@ -364,6 +364,33 @@ def run():
        next(r[2] for r in cur.fetchall() if r[1] == 'reading'), 'REAL')
     cur.close()
 
+    # --- scalar ---
+    # ChargeLog has 7 rows: ts=1000..1006, voltage_mv=4100..4106, cycle_id=cyc.id
+    ok('scalar COUNT *',        ChargeLog.scalar('COUNT'),                          7)
+    ok('scalar COUNT field',    ChargeLog.scalar('COUNT', 'voltage_mv'),            7)
+    ok('scalar MAX',            ChargeLog.scalar('MAX', 'voltage_mv'),           4106)
+    ok('scalar MIN',            ChargeLog.scalar('MIN', 'voltage_mv'),           4100)
+    ok('scalar MAX with where', ChargeLog.scalar('MAX', 'ts', ts=('<=', 1003)),  1003)
+    ok('scalar on empty',       ChargeLog.scalar('MAX', 'ts', ts=('>', 9999)),   None)
+
+    # --- aggregate ---
+    # Insert a second cycle with 3 charge log rows so GROUP BY returns 2 groups
+    cyc3 = Cycle(cell_id=3, started_at=3000).insert()
+    for i in range(3):
+        ChargeLog(ts=2000 + i, cycle_id=cyc3.id,
+                  voltage_mv=4200 + i, current_ma=300,
+                  temp_c=30.0, state=0).insert()
+
+    agg = ChargeLog.aggregate('COUNT', 'id', group_by='cycle_id')
+    agg_dict = {r[0]: r[1] for r in agg}
+    ok('aggregate COUNT groups',        len(agg_dict),          2)
+    ok('aggregate COUNT group cyc',     agg_dict[cyc.id],       7)
+    ok('aggregate COUNT group cyc3',    agg_dict[cyc3.id],      3)
+
+    agg2 = ChargeLog.aggregate('MAX', 'voltage_mv', group_by='cycle_id',
+                               cycle_id=cyc3.id)
+    ok('aggregate with where filter',   agg2[0][1],          4202)
+
     print()
     print('{} passed, {} failed'.format(passed, failed))
     return failed == 0

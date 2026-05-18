@@ -299,21 +299,7 @@ class Model:
     def filter(cls, order=None, limit=None, offset=None, where=None, **kwargs):
         field_names = list(cls._fields.keys())
         cols = ', '.join(_qi(f) for f in field_names)
-        parts = []
-        vals = []
-        for k, v in kwargs.items():
-            if isinstance(v, tuple):
-                parts.append(_qi(k) + ' ' + v[0] + ' ?')
-                vals.append(v[1])
-            else:
-                parts.append(_qi(k) + ' = ?')
-                vals.append(v)
-        if where is not None:
-            if isinstance(where, tuple):
-                parts.append(where[0])
-                vals.extend(where[1])
-            else:
-                parts.append(where)
+        parts, vals = _where_parts(kwargs, where)
         if parts:
             sql = 'SELECT {} FROM {} WHERE {}'.format(
                 cols, _qi(cls._table), ' AND '.join(parts))
@@ -341,11 +327,57 @@ class Model:
             results.append(_row_to_obj(cls, field_names, row))
         return results
 
+    @classmethod
+    def scalar(cls, fn, field=None, where=None, **kwargs):
+        target = '*' if field is None else _qi(field)
+        parts, vals = _where_parts(kwargs, where)
+        sql = 'SELECT {}({}) FROM {}'.format(fn, target, _qi(cls._table))
+        if parts:
+            sql += ' WHERE ' + ' AND '.join(parts)
+        cur = cls._db.execute(sql, vals)
+        row = cur.fetchone()
+        cur.close()
+        return row[0] if row else None
+
+    @classmethod
+    def aggregate(cls, fn, field, group_by, where=None, **kwargs):
+        if isinstance(group_by, str):
+            group_by = [group_by]
+        parts, vals = _where_parts(kwargs, where)
+        group_cols = ', '.join(_qi(c) for c in group_by)
+        sql = 'SELECT {}, {}({}) FROM {}'.format(
+            group_cols, fn, _qi(field), _qi(cls._table))
+        if parts:
+            sql += ' WHERE ' + ' AND '.join(parts)
+        sql += ' GROUP BY ' + group_cols
+        cur = cls._db.execute(sql, vals)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
 
 # --- Helpers ---
 
 def _qi(name):
     return '"' + name.replace('"', '""') + '"'
+
+def _where_parts(kwargs, where):
+    parts = []
+    vals = []
+    for k, v in kwargs.items():
+        if isinstance(v, tuple):
+            parts.append(_qi(k) + ' ' + v[0] + ' ?')
+            vals.append(v[1])
+        else:
+            parts.append(_qi(k) + ' = ?')
+            vals.append(v)
+    if where is not None:
+        if isinstance(where, tuple):
+            parts.append(where[0])
+            vals.extend(where[1])
+        else:
+            parts.append(where)
+    return parts, vals
 
 def _build_table_sql(cls, tbl=None):
     if tbl is None:

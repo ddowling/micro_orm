@@ -109,6 +109,16 @@ MyModel.filter(                          # SELECT …, returns list
     limit=10,                            #   LIMIT n
     offset=20,                           #   OFFSET n
 )
+MyModel.scalar(                          # SELECT fn(field) …, returns single value
+    'COUNT',                             #   fn: COUNT, MIN, MAX (no GROUP BY)
+    'voltage_mv',                        #   field: omit or None for COUNT(*)
+    field=value,                         #   optional WHERE kwargs (same as filter)
+)
+MyModel.aggregate(                       # SELECT group_by, fn(field) … GROUP BY …
+    'SUM', 'energy_mwh',                 #   fn and field are required
+    group_by='cycle_id',                 #   group_by: field name or list of names
+    field=value,                         #   optional WHERE kwargs (same as filter)
+)                                        #   returns list of tuples (group_value, agg_value)
 ```
 
 ### Instance methods
